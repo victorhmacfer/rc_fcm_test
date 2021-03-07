@@ -1,66 +1,68 @@
+import 'dart:async';
+
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_remote_config/firebase_remote_config.dart';
 import 'package:flutter/material.dart';
 
 void main() {
-  runApp(MyApp());
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(MaterialApp(
+      title: 'Remote Config Example',
+      home: FutureBuilder<RemoteConfig>(
+        future: setupRemoteConfig(),
+        builder: (BuildContext context, AsyncSnapshot<RemoteConfig> snapshot) {
+          return snapshot.hasData
+              ? WelcomeWidget(remoteConfig: snapshot.data)
+              : Container();
+        },
+      )));
 }
 
-class MyApp extends StatelessWidget {
-  // This widget is the root of your application.
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Flutter Demo',
-      theme: ThemeData(
-        primarySwatch: Colors.blue,
-      ),
-      home: MyHomePage(title: 'Flutter Demo Home Page'),
-    );
-  }
-}
+class WelcomeWidget extends AnimatedWidget {
+  WelcomeWidget({this.remoteConfig}) : super(listenable: remoteConfig);
 
-class MyHomePage extends StatefulWidget {
-  MyHomePage({Key key, this.title}) : super(key: key);
-
-  final String title;
-
-  @override
-  _MyHomePageState createState() => _MyHomePageState();
-}
-
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
-
-  void _incrementCounter() {
-    setState(() {
-      _counter++;
-    });
-  }
+  final RemoteConfig remoteConfig;
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.title),
+        title: const Text('Remote Config Example'),
       ),
       body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            Text(
-              'You have pushed the button this many times:',
-            ),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headline4,
-            ),
-          ],
-        ),
-      ),
+          child: Text(
+        'Welcome, ${remoteConfig.getString('welcome')}',
+        style: TextStyle(fontSize: 20),
+      )),
       floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: Icon(Icons.add),
-      ),
+          child: const Icon(Icons.refresh),
+          onPressed: () async {
+            try {
+              // Using default duration to force fetching from remote server.
+              await remoteConfig.fetch(expiration: const Duration(seconds: 0));
+              await remoteConfig.activateFetched();
+            } on FetchThrottledException catch (exception) {
+              // Fetch throttled.
+              print(exception);
+            } catch (exception) {
+              print(
+                  'Unable to fetch remote config. Cached or default values will be '
+                  'used');
+            }
+          }),
     );
   }
+}
+
+Future<RemoteConfig> setupRemoteConfig() async {
+  await Firebase.initializeApp();
+  final RemoteConfig remoteConfig = await RemoteConfig.instance;
+  // Allow a fetch every millisecond. Default is 12 hours.
+  remoteConfig
+      .setConfigSettings(RemoteConfigSettings(minimumFetchIntervalMillis: 1));
+  remoteConfig.setDefaults(<String, dynamic>{
+    'welcome': 'John Doe',
+    'hello': 'default hello',
+  });
+  return remoteConfig;
 }
