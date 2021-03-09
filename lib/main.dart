@@ -4,7 +4,6 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:firebase_remote_config/firebase_remote_config.dart';
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -87,10 +86,18 @@ Color _bgColor(String remoteConfigBgColor) {
 }
 
 Future _msgHandler(Map<String, dynamic> message) async {
+  var rc = await RemoteConfig.instance;
   if (message['data'].containsKey('CONFIG_STATE')) {
-    SharedPreferences sp = await SharedPreferences.getInstance();
-    await sp.setBool('RC_CACHE_FORCED_STALE', true);
-    print('I received an FCM message');
+    print('I received a foreground FCM message');
+    _fetchRemoteConfig(rc, expiration: Duration(seconds: 0));
+  }
+}
+
+Future _backgroundMsgHandler(Map<String, dynamic> message) async {
+  var rc = await RemoteConfig.instance;
+  if (message['data'].containsKey('CONFIG_STATE')) {
+    print('I received a background FCM message');
+    _fetchRemoteConfig(rc, expiration: Duration(seconds: 0));
   }
 }
 
@@ -100,36 +107,27 @@ Future<RemoteConfig> setup() async {
 
   await fbMessaging.subscribeToTopic('PUSH_RC');
 
-  fbMessaging.configure(
-    onMessage: _msgHandler,
-    onBackgroundMessage: _msgHandler,
-  );
-
   final RemoteConfig remoteConfig = await RemoteConfig.instance;
   remoteConfig.setDefaults(<String, dynamic>{
     'welcome': 'John Doe',
     'bgColor': 'red100',
   });
 
-  var sp = await SharedPreferences.getInstance();
-  var shouldFetchOnStartup = sp.getBool('RC_CACHE_FORCED_STALE') ?? false;
+  _fetchRemoteConfig(remoteConfig);
 
-  if (shouldFetchOnStartup) {
-    _fetchRemoteConfig(remoteConfig, sp, expiration: Duration(seconds: 0));
-  }
-
-  _fetchRemoteConfig(remoteConfig, sp);
+  fbMessaging.configure(
+    onMessage: _msgHandler,
+    onBackgroundMessage: _backgroundMsgHandler,
+  );
 
   return remoteConfig;
 }
 
-_fetchRemoteConfig(
-    RemoteConfig remoteConfig, SharedPreferences sharedPreferences,
+_fetchRemoteConfig(RemoteConfig remoteConfig,
     {Duration expiration = defaultExpirationTime}) async {
   try {
     await remoteConfig.fetch(expiration: expiration);
     await remoteConfig.activateFetched();
-    sharedPreferences.setBool('RC_CACHE_FORCED_STALE', false);
   } on FetchThrottledException catch (exception) {
     print(exception);
   } catch (exception) {
