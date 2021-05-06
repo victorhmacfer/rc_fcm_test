@@ -4,7 +4,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:firebase_remote_config/firebase_remote_config.dart';
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -24,6 +24,7 @@ void main() {
 }
 
 const defaultExpirationTime = Duration(minutes: 12, seconds: 10);
+const now = Duration(seconds: 0);
 
 class WelcomeWidget extends AnimatedWidget {
   WelcomeWidget({this.remoteConfig}) : super(listenable: remoteConfig);
@@ -43,35 +44,52 @@ class WelcomeWidget extends AnimatedWidget {
             'Welcome, ${remoteConfig.getString('welcome')}',
             style: TextStyle(fontSize: 20),
           )),
-      // floatingActionButton: FloatingActionButton(
-      //     child: const Icon(Icons.refresh),
-      //     onPressed: () async {
-      //       try {
-      //         print('I got inside the fab onTap');
-      //         var sp = await SharedPreferences.getInstance();
-
-      //         Duration exp = defaultExpirationTime;
-
-      //         var forcedFetch = sp.getBool('RC_CACHE_FORCED_STALE') ?? false;
-      //         if (forcedFetch) {
-      //           exp = Duration(seconds: 0);
-      //           sp.setBool('RC_CACHE_FORCED_STALE', false);
-      //         }
-
-      //         print('the used exp is $exp');
-
-      //         await remoteConfig.fetch(expiration: exp);
-      //         await remoteConfig.activateFetched();
-      //       } on FetchThrottledException catch (exception) {
-      //         // Fetch throttled.
-      //         print(exception);
-      //       } catch (exception) {
-      //         print(exception);
-      //         print('Unable to fetch remote config. Cached or default values'
-      //             ' will be used');
-      //       }
-      //     }),
     );
+  }
+}
+
+Future<RemoteConfig> setup() async {
+  final storage = FlutterSecureStorage();
+
+  await Firebase.initializeApp();
+  final fbMessaging = FirebaseMessaging.instance;
+
+  await fbMessaging.subscribeToTopic('PUSH_RC');
+
+  FirebaseMessaging.onMessage.listen(_foregroundHandler);
+  FirebaseMessaging.onBackgroundMessage(_bgHandler);
+
+  final RemoteConfig remoteConfig = await RemoteConfig.instance;
+  remoteConfig.setDefaults(<String, dynamic>{
+    'welcome': 'John Doe',
+    'bgColor': 'red100',
+  });
+
+  final shouldFetchOnStartup =
+      (await storage.read(key: 'RC_CACHE_FORCED_STALE')) == 'true';
+
+  if (shouldFetchOnStartup) {
+    await _fetchRemoteConfig(remoteConfig, storage, expiration: now);
+  }
+
+  await _fetchRemoteConfig(remoteConfig, storage);
+
+  await remoteConfig.activateFetched();
+
+  return remoteConfig;
+}
+
+Future _fetchRemoteConfig(RemoteConfig remoteConfig, FlutterSecureStorage storage,
+    {Duration expiration = defaultExpirationTime}) async {
+  try {
+    await remoteConfig.fetch(expiration: expiration);
+    await remoteConfig.activateFetched();
+    storage.write(key: 'RC_CACHE_FORCED_STALE', value: 'false');
+  } on FetchThrottledException catch (exception) {
+    print(exception);
+  } catch (exception) {
+    print('Unable to fetch remote config. Cached or default values'
+        ' will be used');
   }
 }
 
@@ -86,54 +104,38 @@ Color _bgColor(String remoteConfigBgColor) {
   return Colors.white;
 }
 
-Future _msgHandler(Map<String, dynamic> message) async {
-  if (message['data'].containsKey('CONFIG_STATE')) {
-    SharedPreferences sp = await SharedPreferences.getInstance();
-    await sp.setBool('RC_CACHE_FORCED_STALE', true);
-    print('I received an FCM message');
+Future _foregroundHandler(RemoteMessage msg) async {
+  print('I received a FOREGROUND FCM message');
+
+  final storage = FlutterSecureStorage();
+
+  if (msg.data.containsKey('CONFIG_STATE')) {
+    final before = await storage.read(key: 'RC_CACHE_FORCED_STALE');
+
+    print('before.. the value is $before');
+
+    await storage.write(key: 'RC_CACHE_FORCED_STALE', value: 'true');
+
+    final after = await storage.read(key: 'RC_CACHE_FORCED_STALE');
+
+    print('after.. the value is $after');
   }
 }
 
-Future<RemoteConfig> setup() async {
-  await Firebase.initializeApp();
-  var fbMessaging = FirebaseMessaging();
+Future<void> _bgHandler(RemoteMessage msg) async {
+  print('I received a BACKGROUND FCM message');
 
-  await fbMessaging.subscribeToTopic('PUSH_RC');
+  final storage = FlutterSecureStorage();
 
-  fbMessaging.configure(
-    onMessage: _msgHandler,
-    onBackgroundMessage: _msgHandler,
-  );
+  if (msg.data.containsKey('CONFIG_STATE')) {
+    final before = await storage.read(key: 'RC_CACHE_FORCED_STALE');
 
-  final RemoteConfig remoteConfig = await RemoteConfig.instance;
-  remoteConfig.setDefaults(<String, dynamic>{
-    'welcome': 'John Doe',
-    'bgColor': 'red100',
-  });
+    print('before do BG.. the value is $before');
 
-  var sp = await SharedPreferences.getInstance();
-  var shouldFetchOnStartup = sp.getBool('RC_CACHE_FORCED_STALE') ?? false;
+    await storage.write(key: 'RC_CACHE_FORCED_STALE', value: 'true');
 
-  if (shouldFetchOnStartup) {
-    _fetchRemoteConfig(remoteConfig, sp, expiration: Duration(seconds: 0));
-  }
+    final after = await storage.read(key: 'RC_CACHE_FORCED_STALE');
 
-  _fetchRemoteConfig(remoteConfig, sp);
-
-  return remoteConfig;
-}
-
-_fetchRemoteConfig(
-    RemoteConfig remoteConfig, SharedPreferences sharedPreferences,
-    {Duration expiration = defaultExpirationTime}) async {
-  try {
-    await remoteConfig.fetch(expiration: expiration);
-    await remoteConfig.activateFetched();
-    sharedPreferences.setBool('RC_CACHE_FORCED_STALE', false);
-  } on FetchThrottledException catch (exception) {
-    print(exception);
-  } catch (exception) {
-    print('Unable to fetch remote config. Cached or default values'
-        ' will be used');
+    print('after do BG.. the value is $after');
   }
 }

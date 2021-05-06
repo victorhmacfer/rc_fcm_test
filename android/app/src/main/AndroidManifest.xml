@@ -1,7 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.example.rc_fcm_test">
    <application
-        android:name=".Application"
         android:label="rc_fcm_test"
         android:icon="@mipmap/ic_launcher">
         <activity
